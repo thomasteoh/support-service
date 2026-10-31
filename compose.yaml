@@ -1,0 +1,75 @@
+# support-service — deploy compose (solo.harmonicr.com, rootless Podman).
+# Mirrors the event-triage publish pattern: GHCR image, shared zitadel
+# network, extra_hosts for OIDC, dedicated support-postgres (no reuse).
+#
+# C-1: the service joins the zitadel bridge and is reachable as
+#      support-service:5003 — the exact path event-triage calls.
+# C-2: the bridge sends X-API-Key; CREATE_API_KEY is the shared secret.
+# S-4: support-postgres must be healthy before the service starts.
+# S-5: OIDC issuer IP is env-driven (extra_hosts), never hardcoded.
+# C-3: pull credential (public package OR token in ~/.config/containers/auth.json).
+services:
+  support-service:
+    image: ghcr.io/thomasteoh/support-service:latest
+    # Pin to a :sha tag in production — NEVER float on :latest (the Peppermint
+    # 0.5.5 abandonment being escaped). Update via `podman pull --force-recreate`.
+    container_name: support-service
+    restart: unless-stopped
+    environment:
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}        # from deploy .env, never committed
+      - DB_HOST=support-postgres
+      - DB_PORT=5432
+      - DB_NAME=support
+      - CREATE_API_KEY=${CREATE_API_KEY}   # shared secret (C-2)
+      - LLMESH_URL=https://llm.harmonicr.com
+      - LLMESH_KEY=${LLMESH_KEY}           # team key + RBAC allow policy (S-1)
+      - OIDC_ISSUER=https://auth.harmonicr.com
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - OIDC_REDIRECT_URL=https://support.harmonicr.com/callback
+      - SESSION_SECRET=${SESSION_SECRET}
+      - API_LISTEN_ADDR=:5003
+      - UI_LISTEN_ADDR=:3000
+    networks:
+      - zitadel
+    extra_hosts:
+      - "auth.harmonicr.com:${OIDC_HOST_IP}"   # S-5: env-driven, not hardcoded
+    userns_mode: keep-id
+    depends_on:
+      support-postgres:
+        condition: service_healthy   # S-4
+    ports:
+      - "127.0.0.1:52171:5003"   # host-side API debug only (NOT the integration path)
+      - "127.0.0.1:52170:3000"   # staff UI (Caddy fronts support.harmonicr.com)
+    healthcheck:
+      test: ["CMD", "/support-service", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  support-postgres:
+    image: postgres:16-alpine
+    container_name: support-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=support
+    networks:
+      - zitadel
+    userns_mode: keep-id
+    volumes:
+      - support-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d support"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  support-data:
+
+networks:
+  zitadel:
+    external: true

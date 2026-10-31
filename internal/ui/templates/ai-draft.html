@@ -1,0 +1,28 @@
+{{define "ai-draft"}}
+<div class="card">
+  <h2>AI suggestion</h2>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{else}}
+  {{if .Action.SuggestedReply}}
+    <p><strong>Suggested reply:</strong></p>
+    <p>{{.Action.SuggestedReply}}</p>
+  {{end}}
+  {{if .Action.SuggestedStep}}
+    <p><strong>Suggested next step:</strong></p>
+    <p>{{.Action.SuggestedStep}}</p>
+  {{end}}
+  {{if .Action.Priority}}
+    <p><strong>Priority:</strong> {{.Action.Priority}}</p>
+  {{end}}
+  {{if .Action.Status}}
+    <p><strong>Status:</strong> {{.Action.Status}}</p>
+  {{end}}
+  <form hx-post="/tickets/{{.TicketID}}/ai/apply" hx-target="#comments-{{.TicketID}}" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <input type="hidden" name="reply" value="{{.Action.SuggestedReply}}">
+    <input type="hidden" name="step" value="{{.Action.SuggestedStep}}">
+    <input type="hidden" name="status" value="{{.Action.Status}}">
+    <button>Apply suggestion</button>
+  </form>
+  {{end}}
+</div>
+{{end}}

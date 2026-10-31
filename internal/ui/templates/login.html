@@ -1,0 +1,22 @@
+{{define "login"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign in — Support</title>
+<style>body{font:15px system-ui,sans-serif;background:#fafafa;color:#222;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:32px;text-align:center}
+a.btn{display:inline-block;background:#2e6da4;color:#fff;border:0;padding:12px 20px;border-radius:4px;font-size:16px;cursor:pointer;text-decoration:none;min-height:44px;min-width:44px;box-sizing:border-box}
+.muted{color:#666;font-size:13px}
+.error{color:#c0392b;margin-top:10px}</style>
+</head>
+<body>
+<div class="card">
+  <h1>Support</h1>
+  <p class="muted">Sign in with Zitadel to view tickets.</p>
+  <a class="btn" href="/login/start" role="button">Sign in</a>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+</div>
+</body>
+</html>
+{{end}}

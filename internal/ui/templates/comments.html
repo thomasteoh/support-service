@@ -1,0 +1,10 @@
+{{define "comments"}}
+{{range .Comments}}
+<div class="comment" style="border-bottom:1px solid var(--line);padding:8px 0">
+  <span class="muted">{{.Author}} — {{.CreatedAt.Format "Jan 02 15:04"}}</span>
+  <p>{{.Body}}</p>
+</div>
+{{else}}
+<p class="muted">No comments yet.</p>
+{{end}}
+{{end}}

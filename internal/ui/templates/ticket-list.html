@@ -1,0 +1,24 @@
+{{define "ticket-list"}}
+{{if .Tickets}}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>#</th><th>Title</th><th>Priority</th><th>Status</th><th>Created</th></tr>
+  </thead>
+  <tbody>
+  {{range .Tickets}}
+    <tr>
+      <td><a href="/tickets/{{.ID}}">{{.ID}}</a></td>
+      <td>{{.Title}}</td>
+      <td>{{.Priority}}</td>
+      <td><span class="pill {{.Status}}">{{.Status}}</span></td>
+      <td class="muted">{{.CreatedAt.Format "Jan 02 15:04"}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted">No tickets yet.</p>
+{{end}}
+{{end}}

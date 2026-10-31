@@ -1,0 +1,43 @@
+{{define "detail"}}
+{{template "head" .}}
+<h1>#{{.Ticket.ID}} — {{.Ticket.Title}}</h1>
+<div class="card">
+  <p><strong>Status:</strong> <span class="pill {{.Ticket.Status}}">{{.Ticket.Status}}</span>
+     <strong>Priority:</strong> {{.Ticket.Priority}}
+     <strong>Type:</strong> {{.Ticket.Type}}</p>
+  <p class="muted">By {{.Ticket.Name}}{{if .Ticket.Company}} ({{.Ticket.Company}}){{end}} — {{.Ticket.CreatedAt.Format "Jan 02 15:04"}}</p>
+  {{if .Ticket.Detail}}<p>{{.Ticket.Detail}}</p>{{end}}
+  {{if .Triage.SuggestedAction}}
+  <div class="card">
+    <h2>AI triage</h2>
+    {{if .Triage.Priority}}<p><strong>Priority:</strong> {{.Triage.Priority}}</p>{{end}}
+    {{if .Triage.Type}}<p><strong>Type:</strong> {{.Triage.Type}}</p>{{end}}
+    <p><strong>Suggested action:</strong> {{.Triage.SuggestedAction}}</p>
+  </div>
+  {{end}}
+  <button hx-post="/tickets/{{.Ticket.ID}}/ai/draft" hx-vals='{"csrf_token": "{{.CSRF}}"}' hx-target="#ai-draft-{{.Ticket.ID}}" hx-swap="innerHTML">AI suggestion</button>
+  <div id="ai-draft-{{.Ticket.ID}}" aria-live="polite"></div>
+  <form hx-post="/tickets/{{.Ticket.ID}}/status" hx-target="#status-{{.Ticket.ID}}" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <select name="status">
+      <option value="open" {{if eq .Ticket.Status "open"}}selected{{end}}>open</option>
+      <option value="assigned" {{if eq .Ticket.Status "assigned"}}selected{{end}}>assigned</option>
+      <option value="closed" {{if eq .Ticket.Status "closed"}}selected{{end}}>closed</option>
+    </select>
+    <button>Update</button>
+  </form>
+  <div id="status-{{.Ticket.ID}}"></div>
+</div>
+<div class="card">
+  <h2>Comments</h2>
+  <div id="comments-{{.Ticket.ID}}" hx-get="/tickets/{{.Ticket.ID}}/comments" hx-trigger="load" aria-live="polite">
+    <p class="muted">loading…</p>
+  </div>
+  <form hx-post="/tickets/{{.Ticket.ID}}/comment" hx-target="#comments-{{.Ticket.ID}}" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+    <textarea name="body" placeholder="Reply…"></textarea>
+    <button>Add comment</button>
+  </form>
+</div>
+{{template "foot" .}}
+{{end}}

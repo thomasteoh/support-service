@@ -1,0 +1,26 @@
+{{define "index"}}
+{{template "head" .}}
+<h1>Tickets</h1>
+{{if .Tickets}}
+<table>
+  <thead>
+    <tr><th>#</th><th>Title</th><th>Priority</th><th>Type</th><th>Status</th><th>Created</th></tr>
+  </thead>
+  <tbody>
+  {{range .Tickets}}
+    <tr>
+      <td><a href="/tickets/{{.ID}}">{{.ID}}</a></td>
+      <td>{{.Title}}</td>
+      <td>{{.Priority}}</td>
+      <td>{{.Type}}</td>
+      <td><span class="pill {{.Status}}">{{.Status}}</span></td>
+      <td class="muted">{{.CreatedAt.Format "Jan 02 15:04"}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No tickets yet.</p>
+{{end}}
+{{template "foot" .}}
+{{end}}

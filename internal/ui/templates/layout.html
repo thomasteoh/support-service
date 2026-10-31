@@ -1,0 +1,56 @@
+{{define "head"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}}{{else}}Support{{end}}</title>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<style>
+:root { --bg:#fafafa; --ink:#222; --muted:#666; --line:#ddd; --accent:#2e6da4; --ok:#2e9e5b; --warn:#c8a23a; --bad:#c0392b; }
+body { font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); margin:0; }
+header { background:var(--accent); color:#fff; padding:10px 20px; display:flex; gap:20px; align-items:center; }
+header a { color:#fff; text-decoration:none; }
+header .right { margin-left:auto; }
+main { max-width:1000px; margin:24px auto; padding:0 20px; }
+.skip-link { position:absolute; left:-999px; top:0; background:var(--accent); color:#fff; padding:8px 12px; border-radius:0 0 4px 4px; }
+.skip-link:focus { left:0; }
+.card { background:#fff; border:1px solid var(--line); border-radius:6px; padding:16px; margin-bottom:16px; }
+.pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:12px; }
+.pill.open { background:#e8f2fb; color:#1a4a7a; }
+.pill.assigned { background:#fdf3d8; color:#7a5a1a; }
+.pill.closed { background:#e9f6ec; color:#1a7a3a; }
+table { width:100%; border-collapse:collapse; }
+th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-size:13px; }
+.muted { color:var(--muted); font-size:13px; }
+textarea { width:100%; box-sizing:border-box; min-height:80px; }
+button { background:var(--accent); color:#fff; border:0; padding:12px 18px; border-radius:4px; cursor:pointer; min-height:44px; min-width:44px; font-size:15px; }
+.error { color:var(--bad); }
+/* Responsive: scroll tables horizontally instead of overflowing the viewport. */
+.table-wrap { overflow-x:auto; }
+/* Mobile: stack header nav and let cards breathe. */
+@media (max-width:600px) {
+  main { padding:0 12px; }
+  header { flex-wrap:wrap; gap:10px; }
+  .card { padding:12px; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header>
+  <a href="/">Support</a>
+  <a href="/tickets">Tickets</a>
+  <span class="right">
+    {{if .Session}}<span>{{.Session.Name}}</span> <a href="/logout">logout</a>{{end}}
+  </span>
+</header>
+<main id="main">
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
