@@ -6,9 +6,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -80,6 +82,14 @@ CREATE TABLE IF NOT EXISTS comments (
 	body        TEXT NOT NULL,
 	author      TEXT NOT NULL DEFAULT '',
 	created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+	id          INTEGER PRIMARY KEY DEFAULT 1,
+	ai_enabled  BOOLEAN NOT NULL DEFAULT true,
+	model       TEXT NOT NULL DEFAULT '',
+	ticket_list_limit INTEGER NOT NULL DEFAULT 50,
+	updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `
 	_, err := pool.Exec(ctx, ddl)
@@ -201,6 +211,15 @@ type Comment struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// Settings is the runtime-configurable service settings, persisted in the
+// settings table (one row). Secrets are NEVER stored here — the admin UI
+// manages only non-secret operational values.
+type Settings struct {
+	AIEnabled       bool   `json:"aiEnabled"`
+	Model           string `json:"model"`
+	TicketListLimit int    `json:"ticketListLimit"`
+}
+
 // AddComment appends a staff comment to a ticket.
 func (s *Store) AddComment(ctx context.Context, ticketID int64, body, author string) (int64, error) {
 	var id int64
@@ -235,3 +254,34 @@ func (s *Store) ListComments(ctx context.Context, ticketID int64) ([]Comment, er
 
 // Ping verifies the DB is reachable (health/readiness probe).
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
+// GetSettings loads the runtime settings row (id=1). Missing row returns the
+// zero Settings (the caller falls back to env defaults).
+func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
+	var st Settings
+	err := s.pool.QueryRow(ctx,
+		`SELECT ai_enabled, model, ticket_list_limit FROM settings WHERE id=1`).
+		Scan(&st.AIEnabled, &st.Model, &st.TicketListLimit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Settings{}, nil
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("get settings: %w", err)
+	}
+	return st, nil
+}
+
+// UpdateSettings upserts the runtime settings row (id=1) with the given
+// values. It never touches secrets — only operational values.
+func (s *Store) UpdateSettings(ctx context.Context, st Settings) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO settings (id, ai_enabled, model, ticket_list_limit, updated_at)
+		VALUES (1, $1, $2, $3, now())
+		ON CONFLICT (id) DO UPDATE SET
+			ai_enabled=$1, model=$2, ticket_list_limit=$3, updated_at=now()`,
+		st.AIEnabled, st.Model, st.TicketListLimit)
+	if err != nil {
+		return fmt.Errorf("update settings: %w", err)
+	}
+	return nil
+}

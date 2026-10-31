@@ -20,6 +20,11 @@ See the PRD: `../docs/projects/infrastructure/support-service-prd.md`.
   async, never blocks ticket creation. Staff can request a **draft reply /
   next step** (`POST /tickets/{id}/ai/draft`) — **staff approves before any
   write** (`POST /tickets/{id}/ai/apply`); the draft route never mutates.
+- **Admin settings** (`/admin`, staff) — maintain runtime non-secret
+  settings: **AI model** (`LLMESH_MODEL` env default), **AI enabled** toggle
+  (`AI_ENABLED` env default), and **ticket list limit** (`TICKET_LIST_LIMIT`
+  env default). Persisted in the `settings` table; env vars are the fallback
+  when the row is absent. Secrets are never exposed here.
 
 ## Build & test
 

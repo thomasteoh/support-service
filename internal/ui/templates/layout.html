@@ -27,6 +27,7 @@ th { color:var(--muted); font-size:13px; }
 textarea { width:100%; box-sizing:border-box; min-height:80px; }
 button { background:var(--accent); color:#fff; border:0; padding:12px 18px; border-radius:4px; cursor:pointer; min-height:44px; min-width:44px; font-size:15px; }
 .error { color:var(--bad); }
+.ok { color:var(--ok); }
 /* Responsive: scroll tables horizontally instead of overflowing the viewport. */
 .table-wrap { overflow-x:auto; }
 /* Mobile: stack header nav and let cards breathe. */
@@ -42,6 +43,7 @@ button { background:var(--accent); color:#fff; border:0; padding:12px 18px; bord
 <header>
   <a href="/">Support</a>
   <a href="/tickets">Tickets</a>
+  <a href="/admin">Admin</a>
   <span class="right">
     {{if .Session}}<span>{{.Session.Name}}</span> <a href="/logout">logout</a>{{end}}
   </span>

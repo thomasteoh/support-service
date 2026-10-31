@@ -27,6 +27,11 @@ type Config struct {
 	// AI via llmesh (llm.harmonicr.com, host-network — reached via Caddy route).
 	LLMESHURL string // e.g. "https://llm.harmonicr.com"
 	LLMESHKey string // team key scoped by RBAC allow policy (env only)
+	// LLMESHModel is the env default for the AI model. It is runtime-overridable
+	// through the staff admin UI (persisted in the settings table).
+	LLMESHModel     string
+	AIEnabled       bool // master AI toggle (triage + actioning)
+	TicketListLimit int  // default ticket list limit (runtime-overridable)
 
 	// Zitadel OIDC (UI auth, app "support").
 	OIDCIssuer    string // e.g. "https://auth.harmonicr.com"
@@ -59,6 +64,9 @@ func Load() (*Config, error) {
 		CreateAPIKey:    os.Getenv("CREATE_API_KEY"),
 		LLMESHURL:       getenv("LLMESH_URL", "https://llm.harmonicr.com"),
 		LLMESHKey:       os.Getenv("LLMESH_KEY"),
+		LLMESHModel:     getenv("LLMESH_MODEL", "triage-fast"),
+		AIEnabled:       boolDefault(getenv("AI_ENABLED", "true"), true),
+		TicketListLimit: atoiDefault(getenv("TICKET_LIST_LIMIT", "50"), 50),
 		OIDCIssuer:      getenv("OIDC_ISSUER", "https://auth.harmonicr.com"),
 		OIDCClientID:    os.Getenv("OIDC_CLIENT_ID"),
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
@@ -111,6 +119,17 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+func boolDefault(s string, def bool) bool {
+	if s == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func durDefault(s string, def time.Duration) time.Duration {

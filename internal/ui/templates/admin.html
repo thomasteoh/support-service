@@ -1,0 +1,30 @@
+{{define "admin"}}
+{{template "head" .}}
+<h1>Settings</h1>
+{{if .OK}}<p class="ok">{{.OK}}</p>{{end}}
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+<form method="post" action="/admin/settings">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <div class="card">
+    <h2>AI</h2>
+    <label>
+      <input type="checkbox" name="ai_enabled" {{if .Settings.AIEnabled}}checked{{end}}>
+      Enable AI triage &amp; actioning
+    </label>
+    <p class="muted">When disabled, new tickets skip AI classification and the AI actioning button is hidden.</p>
+    <label>Model
+      <input type="text" name="model" value="{{.Settings.Model}}" placeholder="triage-fast">
+    </label>
+    <p class="muted">The llmesh model name used for triage/actioning. Must match the RBAC allow policy.</p>
+  </div>
+  <div class="card">
+    <h2>Listing</h2>
+    <label>Ticket list limit
+      <input type="number" name="limit" value="{{.Settings.TicketListLimit}}" min="1" max="500">
+    </label>
+    <p class="muted">How many tickets the dashboard shows.</p>
+  </div>
+  <button type="submit">Save settings</button>
+</form>
+{{template "foot" .}}
+{{end}}

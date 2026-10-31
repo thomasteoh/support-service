@@ -24,6 +24,9 @@ services:
       - CREATE_API_KEY=${CREATE_API_KEY}   # shared secret (C-2)
       - LLMESH_URL=https://llm.harmonicr.com
       - LLMESH_KEY=${LLMESH_KEY}           # team key + RBAC allow policy (S-1)
+      - LLMESH_MODEL=${LLMESH_MODEL:-triage-fast}
+      - AI_ENABLED=${AI_ENABLED:-true}
+      - TICKET_LIST_LIMIT=${TICKET_LIST_LIMIT:-50}
       - OIDC_ISSUER=https://auth.harmonicr.com
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}

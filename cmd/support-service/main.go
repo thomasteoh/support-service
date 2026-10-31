@@ -101,8 +101,13 @@ func run(apiOverride, uiOverride string) error {
 	}
 	defer st.Close()
 
-	// AI triage client (llmesh). Advisory only — degrades gracefully.
-	ai := llmesh.New(cfg.LLMESHURL, cfg.LLMESHKey, "triage-fast")
+	// AI triage client (llmesh). The model is env-configured (LLMESH_MODEL),
+	// runtime-overridable via the staff admin UI (persisted settings).
+	ai := llmesh.New(cfg.LLMESHURL, cfg.LLMESHKey, cfg.LLMESHModel)
+
+	// Runtime settings provider: the admin UI reads/writes persisted settings;
+	// the env config supplies the defaults when the settings row is absent.
+	settings := &runtimeSettings{cfg: cfg, st: st}
 
 	logger := log.New(os.Stderr, "support-service: ", log.LstdFlags)
 
@@ -124,6 +129,11 @@ func run(apiOverride, uiOverride string) error {
 	// Async AI hook: classify the ticket, store the suggestion on it.
 	// Never blocks ticket creation; on failure just log (no AI, no error).
 	onTicket := func(ctx context.Context, t *store.Ticket) {
+		// Honor the runtime AI toggle + model (admin UI). If AI is disabled or
+		// the model is empty, skip triage entirely (never call the gateway).
+		if !settings.AIEnabled() || settings.Model() == "" {
+			return
+		}
 		sug, err := ai.Triage(ctx, t.Title, t.Detail, t.Priority, t.Type)
 		if err != nil {
 			logger.Printf("ai triage skipped: %v", err)
@@ -140,13 +150,14 @@ func run(apiOverride, uiOverride string) error {
 		}
 	}
 
-	// API surface (internal, bridge + staff read/update).
+	// API surface (internal, bridge + staff read/update). The onTicket hook
+	// is the async AI triage (advisory); the settings provider gates it.
 	apiSrv := api.New(apiAddr, cfg.CreateAPIKey, st, onTicket, logger)
 
 	// Staff helpdesk UI (Caddy-fronted, Zitadel OIDC). The llmesh client is
-	// passed as the Actioner so staff can request AI drafts (P2); if AI is
-	// disabled the draft route shows an error and never writes.
-	uiSrv, err := ui.New(uiAddr, st, auth, logger, ai)
+	// passed as the Actioner so staff can request AI drafts (P2); the settings
+	// provider supplies the runtime AI model/toggle + ticket list limit.
+	uiSrv, err := ui.New(uiAddr, st, auth, logger, ai, settings)
 	if err != nil {
 		return fmt.Errorf("ui setup: %w", err)
 	}
@@ -165,4 +176,51 @@ func run(apiOverride, uiOverride string) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// runtimeSettings is the runtime settings provider shared by the API hook and
+// the UI. It reads the persisted settings row and falls back to the env config
+// defaults when the row is absent. Writes go through the store (admin UI).
+type runtimeSettings struct {
+	cfg *config.Config
+	st  *store.Store
+}
+
+// AIEnabled reports whether AI triage/actioning is enabled. It prefers the
+// persisted value, falling back to the env default (AI_ENABLED).
+func (r *runtimeSettings) AIEnabled() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if st, err := r.st.GetSettings(ctx); err == nil {
+		return st.AIEnabled
+	}
+	return r.cfg.AIEnabled
+}
+
+// Model reports the runtime AI model. It prefers the persisted value, falling
+// back to the env default (LLMESH_MODEL); empty means AI is not usable.
+func (r *runtimeSettings) Model() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if st, err := r.st.GetSettings(ctx); err == nil && st.Model != "" {
+		return st.Model
+	}
+	return r.cfg.LLMESHModel
+}
+
+// ListLimit reports the ticket list limit. It prefers the persisted value,
+// falling back to the env default (TICKET_LIST_LIMIT).
+func (r *runtimeSettings) ListLimit() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if st, err := r.st.GetSettings(ctx); err == nil && st.TicketListLimit > 0 {
+		return st.TicketListLimit
+	}
+	return r.cfg.TicketListLimit
+}
+
+// Persist writes the runtime settings to the store (admin UI). It accepts
+// only operational values — the caller has already validated them.
+func (r *runtimeSettings) Persist(ctx context.Context, s store.Settings) error {
+	return r.st.UpdateSettings(ctx, s)
 }

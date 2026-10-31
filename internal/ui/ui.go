@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,6 +33,7 @@ type TicketStore interface {
 	SetStatus(ctx context.Context, id int64, status string) error
 	AddComment(ctx context.Context, ticketID int64, body, author string) (int64, error)
 	ListComments(ctx context.Context, ticketID int64) ([]store.Comment, error)
+	GetSettings(ctx context.Context) (store.Settings, error)
 }
 
 // Actioner drafts a staff-facing AI suggestion for a ticket. It is advisory
@@ -41,21 +43,33 @@ type Actioner interface {
 	DraftReply(ctx context.Context, t llmesh.TicketFields) (llmesh.Action, error)
 }
 
+// SettingsProvider is the runtime settings surface the UI reads/writes. The
+// admin routes use it to load and persist non-secret operational settings
+// (AI model/toggle, ticket list limit). Secrets are never exposed here.
+type SettingsProvider interface {
+	AIEnabled() bool
+	Model() string
+	ListLimit() int
+	Persist(ctx context.Context, s store.Settings) error
+}
+
 // Server is the helpdesk UI server.
 type Server struct {
-	addr      string
-	store     TicketStore
-	actioner  Actioner
-	auth      *oidc.Authenticator
-	logger    *log.Logger
-	router    chi.Router
-	tmpl      *template.Template
+	addr     string
+	store    TicketStore
+	actioner Actioner
+	settings SettingsProvider
+	auth     *oidc.Authenticator
+	logger   *log.Logger
+	router   chi.Router
+	tmpl     *template.Template
 }
 
 // New creates the UI server. auth must be non-nil (auth fails closed).
 // actioner may be nil (AI disabled) — the draft route then shows an error and
-// never writes.
-func New(addr string, st TicketStore, auth *oidc.Authenticator, logger *log.Logger, actioner Actioner) (*Server, error) {
+// never writes. settings supplies runtime config (may be nil; the admin
+// routes then show a read-only fallback).
+func New(addr string, st TicketStore, auth *oidc.Authenticator, logger *log.Logger, actioner Actioner, settings SettingsProvider) (*Server, error) {
 	tmpl, err := template.ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -64,6 +78,7 @@ func New(addr string, st TicketStore, auth *oidc.Authenticator, logger *log.Logg
 		addr:     addr,
 		store:    st,
 		actioner: actioner,
+		settings: settings,
 		auth:     auth,
 		logger:   logger,
 		tmpl:     tmpl,
@@ -91,6 +106,8 @@ func (s *Server) routes() chi.Router {
 		r.Post("/tickets/{id}/comment", s.handleComment)
 		r.Post("/tickets/{id}/status", s.handleStatus)
 		r.Get("/tickets/{id}/comments", s.handleCommentsPartial) // htmx swap
+		r.Get("/admin", s.handleAdmin)
+		r.Post("/admin/settings", s.handleAdminSettings)
 	})
 	return r
 }
@@ -138,7 +155,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	list, err := s.store.ListTickets(ctx, 50)
+	limit := 50
+	if s.settings != nil {
+		if l := s.settings.ListLimit(); l > 0 {
+			limit = l
+		}
+	}
+	list, err := s.store.ListTickets(ctx, limit)
 	if err != nil {
 		s.logger.Printf("list: %v", err)
 		s.render(w, "error", map[string]any{"Error": "could not load tickets"})
@@ -245,10 +268,16 @@ func (s *Server) handleCommentsPartial(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAIDraft generates an AI suggestion for a ticket and shows it. It
-// never writes — the returned draft is advisory only (P2).
+// never writes — the returned draft is advisory only (P2). It honors the
+// runtime AI toggle/model: if AI is disabled or no model is set, it shows an
+// error and never calls the gateway.
 func (s *Server) handleAIDraft(w http.ResponseWriter, r *http.Request) {
 	if s.actioner == nil {
 		s.renderAIDraft(w, map[string]any{"Error": "AI is not configured", "TicketID": chi.URLParam(r, "id"), "CSRF": s.csrfToken(r)})
+		return
+	}
+	if s.settings != nil && (!s.settings.AIEnabled() || s.settings.Model() == "") {
+		s.renderAIDraft(w, map[string]any{"Error": "AI is disabled", "TicketID": chi.URLParam(r, "id"), "CSRF": s.csrfToken(r)})
 		return
 	}
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -370,6 +399,101 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, "status", map[string]any{"Ticket": &store.Ticket{ID: id, Status: status}})
+}
+
+// handleAdmin shows the staff settings admin page. It loads the runtime
+// settings (or falls back to defaults) and renders them for editing. Secrets
+// are never shown — only non-secret operational values.
+func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	if s.settings == nil {
+		s.render(w, "error", map[string]any{"Error": "settings not configured"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	st, err := s.store.GetSettings(ctx)
+	if err != nil {
+		s.logger.Printf("admin settings: %v", err)
+		st = store.Settings{}
+	}
+	// Fall back to the runtime defaults for display when the row is absent.
+	if st.Model == "" {
+		st.Model = s.settings.Model()
+	}
+	if st.TicketListLimit <= 0 {
+		st.TicketListLimit = s.settings.ListLimit()
+	}
+	s.render(w, "admin", map[string]any{
+		"Settings": st,
+		"Session":  s.auth.CurrentSession(r),
+		"CSRF":     s.csrfToken(r),
+	})
+}
+
+// handleAdminSettings persists the runtime settings (POST). Only non-secret
+// operational values are accepted: AI enabled, AI model, ticket list limit.
+// The model is validated as a non-empty identifier; the list limit must be a
+// positive integer. On any failure it renders the admin page with an error.
+func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	if s.settings == nil {
+		s.render(w, "error", map[string]any{"Error": "settings not configured"})
+		return
+	}
+	model := strings.TrimSpace(r.FormValue("model"))
+	if model == "" {
+		s.renderAdminErr(w, r, "model is required")
+		return
+	}
+	limit, err := strconv.Atoi(r.FormValue("limit"))
+	if err != nil || limit <= 0 {
+		s.renderAdminErr(w, r, "limit must be a positive number")
+		return
+	}
+	enabled := r.FormValue("ai_enabled") == "on"
+	st := store.Settings{AIEnabled: enabled, Model: model, TicketListLimit: limit}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.settings.Persist(ctx, st); err != nil {
+		s.logger.Printf("admin persist: %v", err)
+		s.renderAdminErr(w, r, "could not save settings")
+		return
+	}
+	s.renderAdminOK(w, r, st)
+}
+
+// renderAdminErr re-renders the admin page with the given error and the
+// submitted values preserved (so staff can fix without re-entering).
+func (s *Server) renderAdminErr(w http.ResponseWriter, r *http.Request, msg string) {
+	s.render(w, "admin", map[string]any{
+		"Settings": store.Settings{
+			AIEnabled:       r.FormValue("ai_enabled") == "on",
+			Model:           r.FormValue("model"),
+			TicketListLimit: atoiSafe(r.FormValue("limit")),
+		},
+		"Error":   msg,
+		"Session": s.auth.CurrentSession(r),
+		"CSRF":    s.csrfToken(r),
+	})
+}
+
+// renderAdminOK re-renders the admin page with a success message and the
+// freshly persisted settings.
+func (s *Server) renderAdminOK(w http.ResponseWriter, r *http.Request, st store.Settings) {
+	s.render(w, "admin", map[string]any{
+		"Settings": st,
+		"OK":       "settings saved",
+		"Session":  s.auth.CurrentSession(r),
+		"CSRF":     s.csrfToken(r),
+	})
+}
+
+// atoiSafe parses an int, returning 0 on failure (never panics).
+func atoiSafe(s string) int {
+	n, _ := strconv.Atoi(s)
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // render executes a template by name.

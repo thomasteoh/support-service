@@ -22,6 +22,7 @@ type fakeStore struct {
 	comments   []store.Comment
 	commentErr error
 	lastStatus string
+	settings   store.Settings
 }
 
 func (f *fakeStore) GetTicket(ctx context.Context, id int64) (*store.Ticket, error) {
@@ -44,6 +45,9 @@ func (f *fakeStore) AddComment(ctx context.Context, ticketID int64, body, author
 func (f *fakeStore) ListComments(ctx context.Context, ticketID int64) ([]store.Comment, error) {
 	return f.comments, nil
 }
+func (f *fakeStore) GetSettings(ctx context.Context) (store.Settings, error) {
+	return f.settings, nil
+}
 
 // newTestUI builds a UI server. enabled=true configures OIDC (provider
 // unreachable but the session-cookie guard still works); enabled=false means
@@ -60,7 +64,7 @@ func newTestUI(st TicketStore, enabled bool) (*Server, error) {
 		RedirectURL:   "https://support.harmonicr.com/callback",
 		SessionSecret: "secret",
 	}, log.New(io.Discard, "", 0))
-	return New(":0", st, auth, log.New(io.Discard, "", 0), nil)
+	return New(":0", st, auth, log.New(io.Discard, "", 0), nil, nil)
 }
 
 // TestProtectedRouteFailClosed verifies a protected route 403s when OIDC is
@@ -336,4 +340,91 @@ func TestAIApplyWriteErrorSurfaced(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "could not apply suggestion") {
 		t.Fatalf("expected error surfaced, got: %s", w.Body.String())
 	}
+}
+
+// TestAdminTemplateParses verifies the admin template executes (with layout).
+func TestAdminTemplateParses(t *testing.T) {
+	srv, err := newTestUI(&fakeStore{}, true)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	w := httptest.NewRecorder()
+	if err := srv.tmpl.ExecuteTemplate(w, "admin", map[string]any{
+		"Settings": store.Settings{AIEnabled: true, Model: "triage-fast", TicketListLimit: 50},
+		"Session":  nil,
+	}); err != nil {
+		t.Fatalf("render admin: %v", err)
+	}
+	if !strings.Contains(w.Body.String(), "triage-fast") {
+		t.Fatalf("missing model: %s", w.Body.String())
+	}
+}
+
+// TestAdminSettingsPersist verifies the admin POST persists the settings via
+// the SettingsProvider and re-renders with a success message.
+func TestAdminSettingsPersist(t *testing.T) {
+	fs := &fakeStore{settings: store.Settings{AIEnabled: true, Model: "triage-fast", TicketListLimit: 50}}
+	srv, err := newTestUI(fs, true)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	srv.settings = &fakeSettings{}
+	req := httptest.NewRequest(http.MethodPost, "/admin/settings", nil)
+	req.Form = url.Values{
+		"ai_enabled": {"on"},
+		"model":      {"triage-fast"},
+		"limit":      {"25"},
+	}
+	w := httptest.NewRecorder()
+	srv.handleAdminSettings(w, req)
+	if !strings.Contains(w.Body.String(), "settings saved") {
+		t.Fatalf("missing success: %s", w.Body.String())
+	}
+}
+
+// TestAdminSettingsRejectsEmptyModel verifies a missing model is rejected.
+func TestAdminSettingsRejectsEmptyModel(t *testing.T) {
+	fs := &fakeStore{}
+	srv, err := newTestUI(fs, true)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	srv.settings = &fakeSettings{}
+	req := httptest.NewRequest(http.MethodPost, "/admin/settings", nil)
+	req.Form = url.Values{"model": {"  "}, "limit": {"50"}}
+	w := httptest.NewRecorder()
+	srv.handleAdminSettings(w, req)
+	if !strings.Contains(w.Body.String(), "model is required") {
+		t.Fatalf("missing validation error: %s", w.Body.String())
+	}
+}
+
+// TestAdminSettingsRejectsBadLimit verifies a non-positive limit is rejected.
+func TestAdminSettingsRejectsBadLimit(t *testing.T) {
+	fs := &fakeStore{}
+	srv, err := newTestUI(fs, true)
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	srv.settings = &fakeSettings{}
+	req := httptest.NewRequest(http.MethodPost, "/admin/settings", nil)
+	req.Form = url.Values{"model": {"triage-fast"}, "limit": {"-1"}}
+	w := httptest.NewRecorder()
+	srv.handleAdminSettings(w, req)
+	if !strings.Contains(w.Body.String(), "limit must be a positive number") {
+		t.Fatalf("missing limit error: %s", w.Body.String())
+	}
+}
+
+// fakeSettings is a stub SettingsProvider for admin tests.
+type fakeSettings struct {
+	persisted store.Settings
+}
+
+func (f *fakeSettings) AIEnabled() bool { return true }
+func (f *fakeSettings) Model() string   { return "triage-fast" }
+func (f *fakeSettings) ListLimit() int  { return 50 }
+func (f *fakeSettings) Persist(ctx context.Context, s store.Settings) error {
+	f.persisted = s
+	return nil
 }
