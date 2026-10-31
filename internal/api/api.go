@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,15 +64,41 @@ func New(addr, createKey string, st TicketStore, onTicket func(context.Context, 
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
 	// Internal API (bridge + staff), reachable only on the container network.
+	// The shared secret (X-API-Key) gates the WHOLE surface — not just create —
+	// so any container on the bridge must be keyed. Health stays open (the
+	// bridge's readiness probe needs it without a key).
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(s.keyMW)
 		r.Post("/ticket/public/create", s.handleCreate)
 		r.Get("/ticket/{id}", s.handleGet)
 		r.Get("/tickets", s.handleList)
 		r.Post("/ticket/{id}/status", s.handleSetStatus)
 	})
-	// Health/readiness probe (the bridge's Ready() checks this).
+	// Health/readiness probe. Serve BOTH /healthz (container healthcheck) and
+	// /health (the path the event-triage bridge's Ready() GETs — contract
+	// preservation C-2/C-1). Same handler; both return 200 {"status":"ok"}.
 	r.Get("/healthz", s.handleHealth)
+	r.Get("/health", s.handleHealth)
 	return r
+}
+
+// keyMW gates the internal API surface with the shared secret. It fails
+// closed: any request without the correct X-API-Key is rejected (401). The
+// create endpoint still checks the key (redundant but explicit); this closes
+// the read/update routes that were previously open on the shared bridge.
+func (s *Server) keyMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.createKey == "" {
+			s.writeErr(w, http.StatusServiceUnavailable, "api not configured")
+			return
+		}
+		got := r.Header.Get("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(s.createKey)) != 1 {
+			s.writeErr(w, http.StatusUnauthorized, "invalid or missing X-API-Key")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleCreate accepts POST /api/v1/ticket/public/create. It REQUIRES the
@@ -82,8 +109,9 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusServiceUnavailable, "create endpoint not configured")
 		return
 	}
-	// Fail closed on missing/incorrect shared secret (C-2).
-	if got := r.Header.Get("X-API-Key"); got != s.createKey {
+	// Fail closed on missing/incorrect shared secret (C-2). Redundant with the
+	// group-level keyMW (defense-in-depth on the bridge-facing endpoint).
+	if got := r.Header.Get("X-API-Key"); subtle.ConstantTimeCompare([]byte(got), []byte(s.createKey)) != 1 {
 		s.writeErr(w, http.StatusUnauthorized, "invalid or missing X-API-Key")
 		return
 	}
@@ -162,7 +190,7 @@ func (s *Server) handleSetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct{ Status string `json:"status"` }
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Status == "" {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || req.Status == "" {
 		s.writeErr(w, http.StatusBadRequest, "status required")
 		return
 	}

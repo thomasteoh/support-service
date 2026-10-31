@@ -9,10 +9,12 @@ See the PRD: `../docs/projects/infrastructure/support-service-prd.md`.
 
 ## What it is
 
-- **Internal API** (`:5003`, container-network only): `POST
-  /api/v1/ticket/public/create` — the bridge calls this. **Gated by a shared
-  secret** (`X-API-Key`, `CREATE_API_KEY`) — never unauthenticated (C-2).
-  Returns `{id, success:true}` — the exact Peppermint contract.
+- **Internal API** (`:5003`, container-network only): the WHOLE `/api/v1`
+  surface — create, read, list, status — is **gated by a shared secret**
+  (`X-API-Key`, `CREATE_API_KEY`); only `/health` and `/healthz` are open
+  (bridge readiness probe + container healthcheck). The bridge calls
+  `POST /api/v1/ticket/public/create`; it returns `{id, success:true}` — the
+  exact Peppermint contract (C-2).
 - **Staff UI** (`:3000`, Caddy-fronted, Zitadel OIDC) — list, view, assign,
   comment, close tickets.
 - **Dedicated Postgres** (`support-postgres`) — no reuse of Peppermint's DB.
@@ -38,7 +40,9 @@ go test -race ./...
 ## Deploy (solo.harmonicr.com, rootless Podman)
 
 ```sh
-podman pull ghcr.io/thomasteoh/support-service:latest --force-recreate
+# Version-pin the pull — never float on :latest (the Peppermint escape).
+# Substitute the built :sha (or a tagged release, e.g. :v1.0.0) for :sha.
+podman pull ghcr.io/thomasteoh/support-service:<sha> --force-recreate
 podman compose up -d
 ```
 

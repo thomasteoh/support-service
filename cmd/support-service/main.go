@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"sync"
 	"time"
 
 	"github.com/thomasteoh/support-service/internal/api"
@@ -181,18 +182,54 @@ func run(apiOverride, uiOverride string) error {
 // runtimeSettings is the runtime settings provider shared by the API hook and
 // the UI. It reads the persisted settings row and falls back to the env config
 // defaults when the row is absent. Writes go through the store (admin UI).
+//
+// The accessors share ONE cached snapshot (loaded at most once per TTL) so the
+// per-ticket hot path (onTicket) doesn't pay a DB round-trip per accessor — it
+// reads the snapshot in memory. Admin writes (Persist) invalidate the cache so
+// the next access re-reads; TTL bounds staleness if a write is missed.
 type runtimeSettings struct {
 	cfg *config.Config
 	st  *store.Store
+
+	mu  sync.Mutex
+	cur *settingsSnapshot // nil until first load
+	at  time.Time         // last successful load
+}
+
+const settingsTTL = 5 * time.Second
+
+type settingsSnapshot struct {
+	aiEnabled     bool
+	model         string
+	ticketListLimit int
+}
+
+// snapshot returns the cached settings, loading from the store at most once per
+// TTL. On store error it returns nil (callers fall back to env defaults). The
+// cache is invalidated by Persist and by TTL expiry.
+func (r *runtimeSettings) snapshot() *settingsSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cur != nil && time.Since(r.at) < settingsTTL {
+		return r.cur
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if st, err := r.st.GetSettings(ctx); err == nil {
+		r.cur = &settingsSnapshot{aiEnabled: st.AIEnabled, model: st.Model, ticketListLimit: st.TicketListLimit}
+		r.at = time.Now()
+		return r.cur
+	}
+	// Store unreadable: keep any prior snapshot (stale is better than a query
+	// storm), but do not cache a nil — next call retries.
+	return r.cur
 }
 
 // AIEnabled reports whether AI triage/actioning is enabled. It prefers the
 // persisted value, falling back to the env default (AI_ENABLED).
 func (r *runtimeSettings) AIEnabled() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if st, err := r.st.GetSettings(ctx); err == nil {
-		return st.AIEnabled
+	if s := r.snapshot(); s != nil {
+		return s.aiEnabled
 	}
 	return r.cfg.AIEnabled
 }
@@ -200,10 +237,8 @@ func (r *runtimeSettings) AIEnabled() bool {
 // Model reports the runtime AI model. It prefers the persisted value, falling
 // back to the env default (LLMESH_MODEL); empty means AI is not usable.
 func (r *runtimeSettings) Model() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if st, err := r.st.GetSettings(ctx); err == nil && st.Model != "" {
-		return st.Model
+	if s := r.snapshot(); s != nil && s.model != "" {
+		return s.model
 	}
 	return r.cfg.LLMESHModel
 }
@@ -211,16 +246,22 @@ func (r *runtimeSettings) Model() string {
 // ListLimit reports the ticket list limit. It prefers the persisted value,
 // falling back to the env default (TICKET_LIST_LIMIT).
 func (r *runtimeSettings) ListLimit() int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if st, err := r.st.GetSettings(ctx); err == nil && st.TicketListLimit > 0 {
-		return st.TicketListLimit
+	if s := r.snapshot(); s != nil && s.ticketListLimit > 0 {
+		return s.ticketListLimit
 	}
 	return r.cfg.TicketListLimit
 }
 
 // Persist writes the runtime settings to the store (admin UI). It accepts
-// only operational values — the caller has already validated them.
+// only operational values — the caller has already validated them. It
+// invalidates the cached snapshot so the next access re-reads.
 func (r *runtimeSettings) Persist(ctx context.Context, s store.Settings) error {
-	return r.st.UpdateSettings(ctx, s)
+	if err := r.st.UpdateSettings(ctx, s); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.cur = &settingsSnapshot{aiEnabled: s.AIEnabled, model: s.Model, ticketListLimit: s.TicketListLimit}
+	r.at = time.Now()
+	r.mu.Unlock()
+	return nil
 }

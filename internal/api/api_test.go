@@ -105,6 +105,50 @@ func TestCreateValidation(t *testing.T) {
 	}
 }
 
+// TestAPISurfaceGated verifies the WHOLE /api/v1 surface (not just create)
+// requires the shared secret — the read/update routes are no longer open on
+// the shared bridge. Health stays open (readiness probe needs no key).
+func TestAPISurfaceGated(t *testing.T) {
+	s := newTestServer("secret-key", &fakeStore{}, nil)
+	// GET /ticket/{id} without key -> 401.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ticket/1", nil)
+	w := httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("get no key: want 401, got %d", w.Code)
+	}
+	// GET /ticket/{id} with key -> 200.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/ticket/1", nil)
+	req.Header.Set("X-API-Key", "secret-key")
+	w = httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get with key: want 200, got %d", w.Code)
+	}
+	// POST /ticket/1/status without key -> 401.
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/ticket/1/status", bytes.NewBufferString(`{"status":"assigned"}`))
+	w = httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status no key: want 401, got %d", w.Code)
+	}
+	// Health stays open (no key needed).
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w = httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("health: want 200, got %d", w.Code)
+	}
+	// The bridge's documented health path is /health — it must also 200 (the
+	// bridge's Ready() GETs it; contract preservation C-2/C-1).
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	w = httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("health alias: want 200, got %d", w.Code)
+	}
+}
+
 // TestHealth verifies the health probe returns 200 when the store pings OK.
 func TestHealth(t *testing.T) {
 	s := newTestServer("secret-key", &fakeStore{}, nil)
