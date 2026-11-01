@@ -64,7 +64,7 @@ func Load() (*Config, error) {
 		CreateAPIKey:    os.Getenv("CREATE_API_KEY"),
 		LLMESHURL:       getenv("LLMESH_URL", "https://llm.harmonicr.com"),
 		LLMESHKey:       os.Getenv("LLMESH_KEY"),
-		LLMESHModel:     getenv("LLMESH_MODEL", "triage-fast"),
+		LLMESHModel:     getenv("LLMESH_MODEL", ""), // empty = AI off until S-1 provisioned
 		AIEnabled:       boolDefault(getenv("AI_ENABLED", "true"), true),
 		TicketListLimit: atoiDefault(getenv("TICKET_LIST_LIMIT", "50"), 50),
 		OIDCIssuer:      getenv("OIDC_ISSUER", "https://auth.harmonicr.com"),
@@ -77,7 +77,13 @@ func Load() (*Config, error) {
 		DedupWindow:     durDefault(getenv("DEDUP_WINDOW", "1h"), time.Hour),
 		RateLimit:       atoiDefault(getenv("RATE_LIMIT", "100"), 100),
 	}
-	// Fail closed on missing required secrets.
+	// Fail closed on missing required secrets. LLMESH_KEY is intentionally
+	// OPTIONAL (PRD: AI is advisory — degrade gracefully, never block ticket
+	// creation; llmesh may not be provisioned yet). OIDC_CLIENT_SECRET is
+	// intentionally OPTIONAL: the Zitadel `support` app is auth method NONE
+	// (public/PKCE) — the secret is never used by the flow (verified in
+	// oauth2: an empty secret is not sent). A missing key disables AI, not
+	// the service.
 	var missing []string
 	if cfg.DBPassword == "" {
 		missing = append(missing, "DB_PASSWORD")
@@ -85,14 +91,8 @@ func Load() (*Config, error) {
 	if cfg.CreateAPIKey == "" {
 		missing = append(missing, "CREATE_API_KEY")
 	}
-	if cfg.LLMESHKey == "" {
-		missing = append(missing, "LLMESH_KEY")
-	}
 	if cfg.OIDCClientID == "" {
 		missing = append(missing, "OIDC_CLIENT_ID")
-	}
-	if cfg.OIDCClientSecret == "" {
-		missing = append(missing, "OIDC_CLIENT_SECRET")
 	}
 	if cfg.SessionSecret == "" {
 		missing = append(missing, "SESSION_SECRET")
